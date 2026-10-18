@@ -1,0 +1,316 @@
+{
+  "name": "SOC-Lite Automated Triage Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alerts",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "11111111-1111-1111-1111-111111110001",
+      "name": "1. Webhook (Wazuh / OPNsense)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "soc-lite-alerts-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ Boolean($json.body.title && $json.body.source && $json.body.severity !== 'info') }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "11111111-1111-1111-1111-111111110002",
+      "name": "2. IF (Filtro Duplicados y Severidad)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (id, external_id, title, description, source, severity, status, source_ip, destination_ip, raw_payload, tags, created_at, updated_at) VALUES (gen_random_uuid(), '{{ $json.body.external_id || 'WAZ-' + Math.floor(Math.random() * 9000 + 1000) }}', '{{ $json.body.title }}', '{{ $json.body.description || '' }}', '{{ $json.body.source }}', '{{ $json.body.severity || 'medium' }}'::severity_level, 'pending'::alert_status, '{{ $json.body.source_ip || '127.0.0.1' }}'::inet, '{{ $json.body.destination_ip || '192.168.1.1' }}'::inet, '{{ JSON.stringify($json.body.raw_payload || {}) }}'::jsonb, ARRAY['n8n', 'automated']::text[], NOW(), NOW()) RETURNING id, external_id, title, source, severity, status, source_ip, destination_ip, raw_payload, tags;"
+      },
+      "id": "11111111-1111-1111-1111-111111110003",
+      "name": "3. PostgreSQL (Persiste Alerta Pendiente)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [680, 280],
+      "credentials": {
+        "postgres": {
+          "id": "soc-postgres-creds",
+          "name": "PostgreSQL SOC-Lite"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://langchain-service:8001/api/v1/triage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"alert_id\": \"{{ $json.id }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"description\": \"Alerta ingerida automaticamente por n8n\",\n  \"source\": \"{{ $json.source }}\",\n  \"source_ip\": \"{{ $json.source_ip }}\",\n  \"destination_ip\": \"{{ $json.destination_ip }}\",\n  \"raw_payload\": {{ JSON.stringify($json.raw_payload) }},\n  \"tags\": {{ JSON.stringify($json.tags) }}\n}",
+        "options": {
+          "retry": {
+            "retries": 3,
+            "delay": 2000
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "11111111-1111-1111-1111-111111110004",
+      "name": "4. HTTP Request (Llamada LangChain Service)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 280]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.severity }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "critical",
+              "output": 0
+            },
+            {
+              "value2": "high",
+              "output": 0
+            },
+            {
+              "value2": "medium",
+              "output": 1
+            }
+          ]
+        },
+        "fallbackOutput": 2
+      },
+      "id": "11111111-1111-1111-1111-111111110006",
+      "name": "6. Switch (Enrutamiento por Severidad)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [1120, 280]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH inserted_triage AS (\n  INSERT INTO triage_results (id, alert_id, verdict, severity, confidence, reasoning, recommended_actions, ai_model, execution_mode, execution_time_ms, created_at)\n  VALUES (gen_random_uuid(), '{{ $json.alert_id }}'::uuid, '{{ $json.verdict }}'::triage_verdict, '{{ $json.severity }}'::severity_level, {{ $json.confidence }}, '{{ $json.reasoning }}', ARRAY[{{ $json.recommended_actions.map(a => `'${a}'`).join(',') }}]::text[], '{{ $json.ai_model }}', '{{ $json.execution_mode }}', {{ $json.execution_time_ms }}, NOW())\n  RETURNING *\n)\nUPDATE alerts \nSET status = CASE WHEN '{{ $json.verdict }}' = 'false_positive' THEN 'false_positive'::alert_status WHEN '{{ $json.severity }}' IN ('critical', 'high') THEN 'escalated'::alert_status ELSE 'triaged'::alert_status END, \n    severity = '{{ $json.severity }}'::severity_level, \n    updated_at = NOW()\nWHERE id = '{{ $json.alert_id }}'::uuid\nRETURNING id, status, severity;"
+      },
+      "id": "11111111-1111-1111-1111-111111110007",
+      "name": "7. PostgreSQL (Guarda Triage y Actualiza Alerta)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [1360, 280],
+      "credentials": {
+        "postgres": {
+          "id": "soc-postgres-creds",
+          "name": "PostgreSQL SOC-Lite"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/SOC/ALERTAS/WEBHOOK_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"🚨 *[SOC-Lite]* Alerta Crítica/Alta Detectada\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🚨 Incidente de Seguridad Crítico\" }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Severidad:* `\" + $('4. HTTP Request (Llamada LangChain Service)').item.json.severity + \"`\\n*Veredicto:* \" + $('4. HTTP Request (Llamada LangChain Service)').item.json.verdict + \"\\n*Razonamiento:* \" + $('4. HTTP Request (Llamada LangChain Service)').item.json.reasoning }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "11111111-1111-1111-1111-111111110008",
+      "name": "8. Slack / Telegram (Notifica Severidad Alta)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1360, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/v1/incidents",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"alert_id\": \"{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.alert_id }}\",\n  \"title\": \"Incidente Automatizado: Amenaza \" + $('4. HTTP Request (Llamada LangChain Service)').item.json.severity.toUpperCase(),\n  \"severity\": \"{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.severity }}\",\n  \"notes\": \"Creado automáticamente por n8n tras confirmación de IA (Modelo: \" + $('4. HTTP Request (Llamada LangChain Service)').item.json.ai_model + \")\"\n}",
+        "options": {}
+      },
+      "id": "11111111-1111-1111-1111-111111110009",
+      "name": "9. HTTP Request (Crear Ticket en osTicket)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1600, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH latest_audit AS (\n  SELECT curr_hash FROM audit_log ORDER BY id DESC LIMIT 1\n)\nINSERT INTO audit_log (username, ip_address, module, action, target_id, details, result, prev_hash, curr_hash, timestamp)\nSELECT \n  'n8n_orchestrator',\n  '172.20.0.5'::inet,\n  'triage',\n  'triage'::audit_action,\n  '{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.alert_id }}',\n  '{\"workflow\": \"soc_lite_triage\", \"verdict\": \"{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.verdict }}\", \"model\": \"{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.ai_model }}\"}'::jsonb,\n  'success'::audit_result,\n  COALESCE((SELECT curr_hash FROM latest_audit), '0000000000000000000000000000000000000000000000000000000000000000'),\n  encode(sha256(('n8n_triage_' || NOW()::text || '_{{ $('4. HTTP Request (Llamada LangChain Service)').item.json.alert_id }}')::bytea), 'hex'),\n  NOW();"
+      },
+      "id": "11111111-1111-1111-1111-111111110010",
+      "name": "10. HTTP / DB (Registra en Bitácora de Auditoría)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [1600, 280],
+      "credentials": {
+        "postgres": {
+          "id": "soc-postgres-creds",
+          "name": "PostgreSQL SOC-Lite"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "11111111-1111-1111-1111-111111110011",
+      "name": "Error Trigger (Captura de Excepciones)",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (username, ip_address, module, action, target_id, details, result, prev_hash, curr_hash, timestamp)\nVALUES (\n  'n8n_error_handler',\n  '172.20.0.5'::inet,\n  'workflow',\n  'triage'::audit_action,\n  '{{ $json.execution.id || 'error' }}',\n  '{\"error\": \"Falla en ejecucion de flujo n8n\", \"node\": \"{{ $json.execution.lastNodeExecuted }}\"}'::jsonb,\n  'failure'::audit_result,\n  '0000000000000000000000000000000000000000000000000000000000000000',\n  encode(sha256(('n8n_error_' || NOW()::text)::bytea), 'hex'),\n  NOW()\n);"
+      },
+      "id": "11111111-1111-1111-1111-111111110012",
+      "name": "Registrar Error en Auditoría",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.2,
+      "position": [920, 500],
+      "credentials": {
+        "postgres": {
+          "id": "soc-postgres-creds",
+          "name": "PostgreSQL SOC-Lite"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "1. Webhook (Wazuh / OPNsense)": {
+      "main": [
+        [
+          {
+            "node": "2. IF (Filtro Duplicados y Severidad)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. IF (Filtro Duplicados y Severidad)": {
+      "main": [
+        [
+          {
+            "node": "3. PostgreSQL (Persiste Alerta Pendiente)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. PostgreSQL (Persiste Alerta Pendiente)": {
+      "main": [
+        [
+          {
+            "node": "4. HTTP Request (Llamada LangChain Service)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. HTTP Request (Llamada LangChain Service)": {
+      "main": [
+        [
+          {
+            "node": "6. Switch (Enrutamiento por Severidad)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Switch (Enrutamiento por Severidad)": {
+      "main": [
+        [
+          {
+            "node": "7. PostgreSQL (Guarda Triage y Actualiza Alerta)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "8. Slack / Telegram (Notifica Severidad Alta)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "7. PostgreSQL (Guarda Triage y Actualiza Alerta)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "7. PostgreSQL (Guarda Triage y Actualiza Alerta)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. PostgreSQL (Guarda Triage y Actualiza Alerta)": {
+      "main": [
+        [
+          {
+            "node": "10. HTTP / DB (Registra en Bitácora de Auditoría)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Slack / Telegram (Notifica Severidad Alta)": {
+      "main": [
+        [
+          {
+            "node": "9. HTTP Request (Crear Ticket en osTicket)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. HTTP Request (Crear Ticket en osTicket)": {
+      "main": [
+        [
+          {
+            "node": "10. HTTP / DB (Registra en Bitácora de Auditoría)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger (Captura de Excepciones)": {
+      "main": [
+        [
+          {
+            "node": "Registrar Error en Auditoría",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
