@@ -28,21 +28,23 @@
 
 ```text
 soc-lite/
-├── README.md                     # Documento principal y guía de inicio rápido
-├── docker-compose.yml             # Orquestación completa de servicios
-├── 01-arquitectura.md             # Especificación arquitectónica, ADRs y riesgos
-├── 02-modelo-datos.md             # Modelo relacional, 12 tablas, 4 vistas y 8 enums
-├── 03-backend.md                  # Especificación técnica del backend FastAPI y RBAC
-├── 04-frontend.md                 # Arquitectura de la consola React Vite y gráficos
-├── 05-workflow-n8n.md             # Diagrama y detalle de los 10 nodos de n8n
-├── 06-datasets-publicos.md        # Catálogo de 56 datasets públicos (8 categorías)
-├── 07-stack-tecnologico.md        # Justificación de tecnologías, alternativas y TCO
+├── README.md                      # Documento principal y guía de inicio rápido
+├── docker-compose.yml              # Orquestación completa de servicios
+├── .env.example                    # Variables de entorno modelo
+├── docs/                           # Documentación técnica exhaustiva (7 secciones)
+│   ├── 01-arquitectura.md          # Especificación arquitectónica, ADRs y riesgos
+│   ├── 02-modelo-datos.md          # Modelo relacional, 12 tablas, 4 vistas y 8 enums
+│   ├── 03-backend.md               # Especificación técnica del backend FastAPI y RBAC
+│   ├── 04-frontend.md              # Arquitectura de la consola React Vite y gráficos
+│   ├── 05-workflow-n8n.md          # Diagrama y detalle de los 10 nodos de n8n
+│   ├── 06-datasets-publicos.md     # Catálogo de 56 datasets públicos (8 categorías)
+│   └── 07-stack-tecnologico.md     # Justificación de tecnologías, alternativas y TCO
 ├── db/
-│   ├── schema.sql                 # Esquema DDL con 12 tablas, 4 vistas, 8 enums e índices
-│   └── seed.sql                   # Datos semilla con roles, usuarios, alertas y auditoría
-├── backend/                       # API REST FastAPI + SQLAlchemy 2.0 Async + Reportes
-├── langchain-service/             # Microservicio de agentes de triaje y enriquecimiento
-├── frontend/                      # Aplicación React 18 + TS + Vite + Recharts
+│   ├── schema.sql                  # Esquema DDL con 12 tablas, 4 vistas, 8 enums e índices
+│   └── seed.sql                    # Datos semilla con roles, usuarios, alertas y auditoría
+├── backend/                        # API REST FastAPI + SQLAlchemy 2.0 Async + Reportes
+├── langchain-service/              # Microservicio de agentes de triaje y enriquecimiento
+├── frontend/                       # Aplicación React 18 + TS + Vite + Recharts
 └── n8n/
     └── soc_lite_triage_workflow.json  # Workflow exportado de 10 nodos con reintentos
 ```
