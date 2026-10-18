@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # 1. Base de Datos Relacional PostgreSQL 16 (12 Tablas, 4 Vistas, 8 ENUMs)
+  # ===========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc_lite_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soc_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc_password}
+      POSTGRES_DB: ${POSTGRES_DB:-soc_lite_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc_user} -d ${POSTGRES_DB:-soc_lite_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - soc_lite_network
+
+  # ===========================================================================
+  # 2. Orquestador Low-Code n8n (10 Nodos de Triaje Automatizado)
+  # ===========================================================================
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: soc_lite_n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-soc_lite_db}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-soc_user}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-soc_password}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/soc_lite_triage_workflow.json:/demo_workflows/workflow.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - soc_lite_network
+
+  # ===========================================================================
+  # 3. Microservicio LangChain (Enriquecimiento OSINT & Agentes de Triaje)
+  # ===========================================================================
+  langchain-service:
+    build:
+      context: ./langchain-service
+      dockerfile: Dockerfile
+    container_name: soc_lite_langchain
+    restart: always
+    ports:
+      - "8001:8001"
+    environment:
+      - SERVICE_PORT=8001
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3:8b}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
+      - ABUSEIPDB_API_KEY=${ABUSEIPDB_API_KEY:-}
+    networks:
+      - soc_lite_network
+
+  # ===========================================================================
+  # 4. Backend API FastAPI (SQLAlchemy 2.0 Async, RBAC, Auditoría SHA-256)
+  # ===========================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: soc_lite_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-soc_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-soc_password}
+      - POSTGRES_DB=${POSTGRES_DB:-soc_lite_db}
+      - SECRET_KEY=${SECRET_KEY:-soc-lite-super-secret-key-32-chars-long-security-token-2026}
+      - LANGCHAIN_SERVICE_URL=http://langchain-service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      langchain-service:
+        condition: service_started
+    networks:
+      - soc_lite_network
+
+  # ===========================================================================
+  # 5. Frontend React 18 + Vite (Consola SOC Dark Cyber Theme)
+  # ===========================================================================
+  frontend:
+    image: node:20-alpine
+    container_name: soc_lite_frontend
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - soc_lite_network
+
+  # ===========================================================================
+  # 6. Motor LLM Local Ollama (Opcional - Perfil 'llm')
+  # ===========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: soc_lite_ollama
+    restart: always
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - soc_lite_network
+
+volumes:
+  postgres_data:
+  n8n_data:
+  ollama_models:
+
+networks:
+  soc_lite_network:
+    driver: bridge
