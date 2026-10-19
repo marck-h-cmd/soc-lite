@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/users", tags=["Usuarios"])
 
 
 class UserCreateSchema(BaseModel):
-    email: EmailStr
+    email: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$", description="Correo electrónico válido")
     full_name: str = Field(..., min_length=3)
     password: str = Field(..., min_length=6)
     role_id: int
